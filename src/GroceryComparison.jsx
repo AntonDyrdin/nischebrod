@@ -202,22 +202,94 @@ const CATALOG = {
   ],
 };
 
-const normalize = (value) => value.trim().toLocaleLowerCase("ru-RU").replaceAll("ё", "е");
+const normalize = (value) => value.trim().toLocaleLowerCase("ru-RU");
 
-// Имитация API одного магазина.
-// При подключении бэкенда достаточно заменить тело этой функции.
+const MAGNIT_SEARCH_URL = "/magnit-api/v2/goods/search";
+const MAGNIT_STORE_CODE = "480057";
+
+async function searchMagnitProducts(query) {
+  const response = await fetch(MAGNIT_SEARCH_URL, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      "x-app-version": "2026.11.3-14.45",
+      "x-client-name": "magnit",
+      "x-device-id": "8cb113a6-6d4d-419e-8651-cd426e46bce5",
+      "x-device-platform": "Web",
+      "x-device-tag": "disabled",
+      "x-magnit-bff": "1",
+      "x-new-magnit": "true",
+    },
+    body: JSON.stringify({
+      includeAdultGoods: true,
+      pagination: {
+        offset: 0,
+        limit: 36,
+      },
+      sort: {
+        order: "desc",
+        type: "popularity",
+      },
+      term: query.trim(),
+      storeCode: MAGNIT_STORE_CODE,
+      storeType: "express",
+      catalogType: "3",
+    }),
+    signal: AbortSignal.timeout(15000),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Ошибка API Магнита: HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+
+  if (!Array.isArray(data.items)) {
+    throw new Error("Некорректный ответ API Магнита");
+  }
+
+  return data.items
+    .filter(
+      (item) =>
+        typeof item.name === "string" &&
+        typeof item.price === "number" &&
+        Number.isFinite(item.price),
+    )
+    .map((item) => ({
+      id: item.id,
+      // Для весовых товаров указываем вес порции,
+      // поскольку item.price — цена именно этой порции.
+      name:
+        item.weighted?.isWeighted && item.weighted.shelfLabel
+          ? `${item.name} (${item.weighted.shelfLabel})`
+          : item.name,
+      price: item.price / 100, // API возвращает копейки.
+      imageUrl:
+        item.gallery?.find((media) => media.type === "IMAGE" && media.url)?.url ??
+        imageUrl("Нет фото"),
+    }));
+}
+
 async function searchStoreProducts(storeId, query) {
+  if (!query.trim()) return [];
+
+  if (storeId === "magnit") {
+    return searchMagnitProducts(query);
+  }
+
+  // Остальные магазины пока используют локальный каталог.
   await new Promise((resolve) => setTimeout(resolve, 250));
 
   const words = normalize(query).split(/\s+/).filter(Boolean);
-
-  if (!words.length) return [];
 
   return CATALOG[storeId].filter((product) => {
     const name = normalize(product.name);
     return words.every((word) => name.includes(word));
   });
 }
+
 
 async function findProducts(query) {
   const entries = await Promise.all(
